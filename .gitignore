@@ -1,0 +1,40 @@
+# Scala and SBT
+target/
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+project/target/
+.history
+.sbtcodesave
+
+# sbt server locks & pipes
+.sbt-server-port
+.sbt-server-pipe
+
+# Bloop and Metals (IDE integration)
+.bloop/
+.metals/
+.ammonite/
+
+# VS Code
+.vscode/
+.vscode-test/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Logs
+*.log
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
