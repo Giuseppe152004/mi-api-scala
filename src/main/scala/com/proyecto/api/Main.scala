@@ -17,12 +17,7 @@ import com.proyecto.api.application.service.{AuthService, CapacitacionService}
 
 object Main extends IOApp.Simple:
 
-  // 1. Servicios de utilidad
-  val dummyHasher = new PasswordHasher[IO]:
-    def hash(password: Password): IO[String] = IO.pure(password.value)
-    def verify(password: Password, hashed: String): IO[Boolean] = IO.pure(password.value == hashed)
-
-  // JWT Real — firma HS256 con secreto configurable vía variable de entorno
+  // 1. Servicios de utilidad y firma de Tokens
   val jwtSecret = sys.env.getOrElse("JWT_SECRET", "mi-api-scala-secreto-desarrollo-2026")
   val tokenService = new JwtTokenService(jwtSecret)
 
@@ -30,12 +25,14 @@ object Main extends IOApp.Simple:
     def isValid(apiKey: String): IO[Boolean] = IO.pure(apiKey == "secret-api-key")
 
   // 2. Instanciar Transactor y Repositorios reales de PostgreSQL
+  // Se eliminan por completo las simulaciones "dummy" para obligar al sistema a leer la BD
   val postgresTransactor = new PostgresTransactor()
   val realUserRepository = new PostgresUserRepository(postgresTransactor)
   val realCapacitacionRepository = new PostgresCapacitacionRepository(postgresTransactor)
 
-  // 3. Instanciar Servicios (Capa de Aplicación)
-  val authService = new AuthService[IO](realUserRepository, dummyHasher, tokenService)
+  // 3. Instanciar Servicios (Capa de Aplicación acoplada a persistencia real)
+  // AuthService ahora solo requiere el repositorio real y el generador de tokens JWT
+  val authService = new AuthService[IO](realUserRepository, tokenService)
   val capacitacionService = new CapacitacionService[IO](realCapacitacionRepository)
 
   // 4. Instanciar Endpoints (Capa de Infraestructura HTTP)
@@ -50,16 +47,15 @@ object Main extends IOApp.Simple:
 
   val apiRoutes = Http4sServerInterpreter[IO]().toRoutes(apiServerEndpoints)
 
-  // 6. Integrar Scalar UI para documentación en /docs
+  // 6. Integrar Scalar UI para la documentación interactiva en /docs
   val docsRoutes = ScalarDocsRoutes.routes(
     apiServerEndpoints.map(_.endpoint),
     "API Autenticación Híbrida", "1.0"
   )
 
-  // Combinar rutas de API + documentación Scalar
   val allRoutes = apiRoutes <+> docsRoutes
 
-  // 7. Configurar Servidor Ember envuelto en Resource para manejo seguro de ciclos de vida
+  // 7. Configurar Servidor Ember bajo un Resource seguro
   val serverResource = EmberServerBuilder
     .default[IO]
     .withHost(ipv4"0.0.0.0")
@@ -70,5 +66,5 @@ object Main extends IOApp.Simple:
   def run: IO[Unit] = 
     serverResource.use { server =>
       IO.println(s"✅ Servidor levantado con éxito. Documentación Scalar en: http://localhost:${server.address.getPort}/docs") *>
-      IO.never // Mantiene la aplicación viva
+      IO.never // Mantiene la ejecución del servidor activa de forma indefinida
     }

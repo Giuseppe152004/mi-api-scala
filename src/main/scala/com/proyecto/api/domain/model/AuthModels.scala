@@ -3,14 +3,13 @@ package com.proyecto.api.domain.model
 enum DocumentType:
   case DNI, CE
 
-// Value objects para mayor tipado y seguridad
 case class DocumentNumber(value: String)
-case class Password(value: String)
 
+// Cambiamos Password por requestIp
 case class UserCredentials(
     documentType: DocumentType,
     documentNumber: DocumentNumber,
-    password: Password
+    requestIp: String
 )
 
 case class AuthToken(value: String)
@@ -18,5 +17,7 @@ case class AuthToken(value: String)
 case class User(
     documentType: DocumentType,
     documentNumber: DocumentNumber,
-    hashedPassword: String
+    nombres: String,
+    apellidos: String,
+    observaciones: Option[String]
 )

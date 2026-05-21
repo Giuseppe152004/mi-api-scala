@@ -4,7 +4,7 @@ import cats.Monad
 import cats.data.EitherT
 import cats.syntax.all.*
 import com.proyecto.api.application.port.in.LoginUseCase
-import com.proyecto.api.application.port.out.{PasswordHasher, TokenService, UserRepository}
+import com.proyecto.api.application.port.out.{TokenService, UserRepository}
 import com.proyecto.api.domain.error.AuthError
 import com.proyecto.api.domain.model.{AuthToken, UserCredentials}
 
@@ -14,23 +14,17 @@ import com.proyecto.api.domain.model.{AuthToken, UserCredentials}
  */
 class AuthService[F[_]: Monad](
     userRepository: UserRepository[F],
-    passwordHasher: PasswordHasher[F],
     tokenService: TokenService[F]
 ) extends LoginUseCase[F]:
 
   override def login(credentials: UserCredentials): F[Either[AuthError, AuthToken]] =
     val process: EitherT[F, AuthError, AuthToken] = for
-      // 1. Buscar usuario por tipo y número de documento
-      userOpt <- EitherT.liftF(userRepository.findUser(credentials.documentType, credentials.documentNumber))
+      // 1. Busca el DNI y registra su IP. Si no existe, corta el proceso con UserNotFound (404)
+      userOpt <- EitherT.liftF(userRepository.findUser(credentials.documentType, credentials.documentNumber, credentials.requestIp))
       user    <- EitherT.fromOption[F](userOpt, AuthError.UserNotFound(): AuthError)
       
-      // 2. Verificar que la contraseña coincida con el hash almacenado
-      isValid <- EitherT.liftF(passwordHasher.verify(credentials.password, user.hashedPassword))
-      _       <- EitherT.cond[F](isValid, (), AuthError.InvalidCredentials(): AuthError)
-      
-      // 3. Generar el Bearer Token para la sesión
-      token   <- EitherT.liftF(tokenService.generateToken(user.documentType, user.documentNumber))
+      // 2. Como el usuario es válido, se genera su Token con todos sus datos
+      token   <- EitherT.liftF(tokenService.generateToken(user))
     yield token
 
-    // Convertimos el EitherT[F, AuthError, AuthToken] de vuelta a F[Either[AuthError, AuthToken]]
     process.value

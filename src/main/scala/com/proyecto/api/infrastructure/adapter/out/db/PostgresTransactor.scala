@@ -4,7 +4,7 @@ import cats.effect.{IO, Resource}
 import java.sql.{Connection, DriverManager}
 
 class PostgresTransactor:
-  private val url = "jdbc:postgresql://142.44.158.217:5432/nx_ecosystem?currentSchema=training_dev"
+  private val url = "jdbc:postgresql://142.44.158.217:5432/ecosystem_dev?currentSchema=training_dev"
   private val user = "api_training_user"
   private val password = "Pepeluchoelquetequieremucho"
 

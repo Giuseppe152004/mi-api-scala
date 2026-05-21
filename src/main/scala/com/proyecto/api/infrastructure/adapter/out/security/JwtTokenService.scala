@@ -7,7 +7,7 @@ import com.auth0.jwt.exceptions.JWTVerificationException
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import com.proyecto.api.application.port.out.TokenService
-import com.proyecto.api.domain.model.{AuthToken, DocumentNumber, DocumentType}
+import com.proyecto.api.domain.model.{AuthToken, DocumentNumber, DocumentType, User}
 import com.proyecto.api.domain.error.AuthError
 
 /**
@@ -26,12 +26,16 @@ class JwtTokenService(secret: String) extends TokenService[IO]:
   private val verifier  = JWT.require(algorithm).build()
   private val EXPIRATION_HOURS = 8L
 
-  override def generateToken(docType: DocumentType, docNum: DocumentNumber): IO[AuthToken] =
+  override def generateToken(user: User): IO[AuthToken] =
     IO.blocking {
       val now = Instant.now()
       val token = JWT.create()
-        .withSubject(docNum.value)
-        .withClaim("docType", docType.toString)
+        .withSubject(user.documentNumber.value)
+        .withClaim("docType", user.documentType.toString)
+        .withClaim("name", s"${user.nombres} ${user.apellidos}")
+        .withClaim("nombres", user.nombres)
+        .withClaim("apellidos", user.apellidos)
+        .withClaim("observaciones", user.observaciones.getOrElse(""))
         .withIssuedAt(now)
         .withExpiresAt(now.plus(EXPIRATION_HOURS, ChronoUnit.HOURS))
         .sign(algorithm)

@@ -7,7 +7,8 @@ import sttp.model.StatusCode
 import io.circe.generic.auto.*
 import cats.effect.IO
 import com.proyecto.api.application.port.in.LoginUseCase
-import com.proyecto.api.domain.model.{DocumentType, DocumentNumber, Password, UserCredentials}
+// AQUÍ ESTÁ EL CAMBIO: Ya no importamos Password
+import com.proyecto.api.domain.model.{DocumentType, DocumentNumber, UserCredentials}
 import com.proyecto.api.domain.error.AuthError
 import com.proyecto.api.infrastructure.adapter.in.http.{ErrorResponse, HttpErrorMapper}
 import com.proyecto.api.application.port.out.{ApiKeyValidator, TokenService}
@@ -24,14 +25,13 @@ class AuthEndpoints(
 
   // 2. Endpoint de Login (Público)
   val loginEndpoint = baseEndpoint.post
-    .in("auth" / "login")
+    .in("api" / "auth" / "login")
     .in(jsonBody[LoginRequest])
     .out(jsonBody[LoginResponse])
-    .summary("Inicia sesión usando DNI/CE y obtiene un Bearer Token")
+    .summary("Inicia sesión verificando si DNI/CE existe y obtiene Token")
     .serverLogic { req =>
-      // Simple transformación de DTO a Dominio
       val docType = if (req.documentType == "DNI") DocumentType.DNI else DocumentType.CE
-      val creds = UserCredentials(docType, DocumentNumber(req.documentNumber), Password(req.password))
+      val creds = UserCredentials(docType, DocumentNumber(req.documentNumber), req.requestIp)
       
       loginUseCase.login(creds).map {
         case Left(err) => Left(HttpErrorMapper.mapToHttp(err))
