@@ -10,10 +10,7 @@ import com.proyecto.api.domain.error.CapacitacionError
 class CapacitacionServiceSpec extends CatsEffectSuite {
 
   class MockCapacitacionRepository extends CapacitacionRepository[IO] {
-    var asistencias = List.empty[Asistencia]
-    var scorecard: Option[Scorecard] = None
-    var bono: Option[BonoCapacitacion] = None
-    var estadoPostulante = PostulanteEstado.EN_CAPACITACION
+    var asistencias = List.empty[(Int, Int, Boolean)] // (postulanteId, dia, asistio)
 
     def existsPostulante(id: Int): IO[Boolean] = 
       IO.pure(id == 145)
@@ -21,27 +18,16 @@ class CapacitacionServiceSpec extends CatsEffectSuite {
     def getPostulanteDocument(id: Int): IO[Option[(DocumentType, DocumentNumber, String)]] = 
       IO.pure(Some((DocumentType.DNI, DocumentNumber("12345678"), "Juan Pérez")))
 
-    def registrarAsistencia(asistencia: Asistencia): IO[Unit] = IO.delay {
-      asistencias = asistencias :+ asistencia
-    }
-
-    def hasAsistencia(postulanteId: Int, dia: Int): IO[Boolean] = 
-      IO.pure(asistencias.exists(a => a.postulanteId == postulanteId && a.diaCapacitacion == dia))
-
-    def registrarScorecard(sc: Scorecard): IO[Unit] = IO.delay {
-      scorecard = Some(sc)
-    }
-
-    def actualizarEstadoPostulante(postulanteId: Int, estado: PostulanteEstado): IO[Unit] = IO.delay {
-      estadoPostulante = estado
+    def registrarAsistencia(postulanteId: Int, diaCapacitacion: Int, asistio: Boolean): IO[Unit] = IO.delay {
+      // Simula UPSERT: reemplaza si ya existe
+      asistencias = asistencias.filterNot(a => a._1 == postulanteId && a._2 == diaCapacitacion)
+      asistencias = asistencias :+ (postulanteId, diaCapacitacion, asistio)
     }
 
     def countAsistenciasValidas(postulanteId: Int): IO[Int] = 
-      IO.pure(asistencias.count(a => a.postulanteId == postulanteId && a.codigoAsistencia == AsistenciaCodigo.A))
+      IO.pure(asistencias.count(a => a._1 == postulanteId && a._3))
 
-    def registrarBono(b: BonoCapacitacion): IO[Unit] = IO.delay {
-      bono = Some(b)
-    }
+    def registrarBono(b: BonoCapacitacion): IO[Unit] = IO.unit
 
     def getResumen(postulanteId: Int): IO[Option[PostulanteResumen]] = 
       IO.pure(Some(PostulanteResumen(
@@ -49,95 +35,97 @@ class CapacitacionServiceSpec extends CatsEffectSuite {
         nombreCompleto = "Juan Pérez",
         tipoDocumento = DocumentType.DNI,
         numeroDocumento = DocumentNumber("12345678"),
-        asistenciasRegistradas = asistencias.count(_.codigoAsistencia == AsistenciaCodigo.A),
-        montoBonoAcumulado = bono.map(_.montoAcumulado).getOrElse(0.0),
-        estadoScorecard = scorecard.map(_.estadoScorecard),
-        validacionOperativa = scorecard.map(_.validacionOperativa),
-        corteOperativo = bono.map(_.corteOperativo),
-        fechaPagoEstimada = bono.map(_.fechaPagoEstimada),
-        estadoGeneral = estadoPostulante
+        asistenciasRegistradas = asistencias.count(a => a._1 == postulanteId && a._3),
+        montoBonoAcumulado = 0.0,
+        estadoScorecard = Some("EN_CAPACITACION"),
+        validacionOperativa = None,
+        corteOperativo = None,
+        fechaPagoEstimada = None,
+        estadoGeneral = PostulanteEstado.EN_CAPACITACION,
+        historialAsistencias = asistencias.filter(_._1 == postulanteId).map(a =>
+          AsistenciaDetalle(dia = a._2, estado = if (a._3) "A" else "F", origen = if (a._2 <= 2) "Manual" else "Nexus")
+        )
+      )))
+
+    def listarPostulantes(): IO[List[PostulanteBasico]] =
+      IO.pure(List(PostulanteBasico(145, "Juan Pérez", "Operador", PostulanteEstado.EN_CAPACITACION)))
+
+    def listarPostulantesPorUsuario(idUser: Int): IO[List[PostulanteDetalle]] =
+      IO.pure(List(PostulanteDetalle(
+        postulanteId = 145,
+        nombres = "Juan",
+        apellidos = "Pérez",
+        tipoDocumento = "DNI",
+        numeroDocumento = "12345678",
+        idPortfolio = Some(1),
+        idCampaign = Some(10),
+        estadoScorecard = "EN_CAPACITACION",
+        historialAsistencias = List(HistorialAsistencia(1, true))
       )))
   }
 
   val postulanteId = 145
 
-  test("Registro exitoso de asistencia manual (Día 1)") {
+  test("Registro exitoso de asistencia (Día 1)") {
     val repo = new MockCapacitacionRepository()
     val service = new CapacitacionService[IO](repo)
 
-    service.registrarAsistenciaManual(postulanteId, 1, AsistenciaCodigo.A).map { result =>
+    service.registrarAsistencia(postulanteId, 1, asistio = true).map { result =>
       assertEquals(result, Right(()))
       assertEquals(repo.asistencias.size, 1)
-      assertEquals(repo.asistencias.head.diaCapacitacion, 1)
-      assertEquals(repo.asistencias.head.codigoAsistencia, AsistenciaCodigo.A)
-      assertEquals(repo.asistencias.head.tipoRegistro, AsistenciaRegistroTipo.Manual)
+      assertEquals(repo.asistencias.head, (postulanteId, 1, true))
     }
   }
 
-  test("Fallo de asistencia manual para Día 3") {
+  test("Fallo de asistencia para Día 8 (fuera de rango)") {
     val repo = new MockCapacitacionRepository()
     val service = new CapacitacionService[IO](repo)
 
-    service.registrarAsistenciaManual(postulanteId, 3, AsistenciaCodigo.A).map { result =>
-      assertEquals(result, Left(CapacitacionError.InvalidDiaManual()))
+    service.registrarAsistencia(postulanteId, 8, asistio = true).map { result =>
+      assertEquals(result, Left(CapacitacionError.InvalidDiaCapacitacion()))
     }
   }
 
-  test("Registro exitoso de asistencia automática (Día 3)") {
+  test("Fallo de asistencia para postulante inexistente") {
     val repo = new MockCapacitacionRepository()
     val service = new CapacitacionService[IO](repo)
 
-    service.registrarAsistenciaAutomatica(postulanteId, 3).map { result =>
-      assertEquals(result, Right(()))
+    service.registrarAsistencia(999, 1, asistio = true).map { result =>
+      assertEquals(result, Left(CapacitacionError.PostulanteNotFound()))
+    }
+  }
+
+  test("UPSERT: actualizar asistencia existente") {
+    val repo = new MockCapacitacionRepository()
+    val service = new CapacitacionService[IO](repo)
+
+    for {
+      _ <- service.registrarAsistencia(postulanteId, 1, asistio = true)
+      _ <- service.registrarAsistencia(postulanteId, 1, asistio = false)
+    } yield {
       assertEquals(repo.asistencias.size, 1)
-      assertEquals(repo.asistencias.head.diaCapacitacion, 3)
-      assertEquals(repo.asistencias.head.codigoAsistencia, AsistenciaCodigo.A)
-      assertEquals(repo.asistencias.head.tipoRegistro, AsistenciaRegistroTipo.Automatico)
+      assertEquals(repo.asistencias.head._3, false) // Actualizado a false
     }
   }
 
-  test("Fallo de asistencia automática para Día 2") {
+  test("Obtener resumen de postulante existente") {
     val repo = new MockCapacitacionRepository()
     val service = new CapacitacionService[IO](repo)
 
-    service.registrarAsistenciaAutomatica(postulanteId, 2).map { result =>
-      assertEquals(result, Left(CapacitacionError.InvalidDiaAutomatico()))
+    service.obtenerResumen(postulanteId).map { result =>
+      assert(result.isRight)
+      assertEquals(result.toOption.get.nombreCompleto, "Juan Pérez")
     }
   }
 
-  test("Registro exitoso de Scorecard APTO y cálculo de bono") {
+  test("Listar mis postulantes devuelve datos correctos") {
     val repo = new MockCapacitacionRepository()
     val service = new CapacitacionService[IO](repo)
 
-    // Pre-cargar 5 asistencias válidas
-    val setup = for {
-      _ <- service.registrarAsistenciaManual(postulanteId, 1, AsistenciaCodigo.A)
-      _ <- service.registrarAsistenciaManual(postulanteId, 2, AsistenciaCodigo.A)
-      _ <- service.registrarAsistenciaAutomatica(postulanteId, 3)
-      _ <- service.registrarAsistenciaAutomatica(postulanteId, 4)
-      _ <- service.registrarAsistenciaAutomatica(postulanteId, 5)
-    } yield ()
-
-    setup.flatMap { _ =>
-      val scorecard = Scorecard(postulanteId, ScorecardEstado.APTO, validacionOperativa = true, "Aprobado")
-      service.registrarScorecard(postulanteId, scorecard).map { result =>
-        assertEquals(result, Right(()))
-        assertEquals(repo.estadoPostulante, PostulanteEstado.ALTA)
-        assert(repo.bono.isDefined)
-        assertEquals(repo.bono.get.diasAsistidos, 5)
-        assertEquals(repo.bono.get.montoAcumulado, 75.00) // 5 * 15
-        
-        // Validar lógica de corte basada en día actual
-        val hoy = LocalDate.now()
-        if (hoy.getDayOfMonth <= 15) {
-          assertEquals(repo.bono.get.corteOperativo, 1)
-          assertEquals(repo.bono.get.fechaPagoEstimada, LocalDate.of(hoy.getYear, hoy.getMonthValue, 18))
-        } else {
-          assertEquals(repo.bono.get.corteOperativo, 2)
-          val proximoMes = hoy.plusMonths(1)
-          assertEquals(repo.bono.get.fechaPagoEstimada, LocalDate.of(proximoMes.getYear, proximoMes.getMonthValue, 5))
-        }
-      }
+    service.listarMisPostulantes(1).map { lista =>
+      assertEquals(lista.size, 1)
+      assertEquals(lista.head.nombres, "Juan")
+      assertEquals(lista.head.historialAsistencias.size, 1)
     }
   }
 }

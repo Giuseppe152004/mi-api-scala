@@ -3,13 +3,14 @@ package com.proyecto.api.infrastructure.adapter.out.db
 import cats.effect.IO
 import com.proyecto.api.application.port.out.CapacitacionRepository
 import com.proyecto.api.domain.model.*
+import io.circe.parser.parse
 
 class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends CapacitacionRepository[IO]:
 
   override def existsPostulante(id: Int): IO[Boolean] =
     transactor.connection.use { conn =>
       IO.blocking {
-        val stmt = conn.prepareStatement("SELECT 1 FROM training_dev.postulantes WHERE id = ?")
+        val stmt = conn.prepareStatement("SELECT 1 FROM training_dev.postulants WHERE id_postulant = ?")
         try
           stmt.setInt(1, id)
           val rs = stmt.executeQuery()
@@ -22,14 +23,14 @@ class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends Cap
   override def getPostulanteDocument(id: Int): IO[Option[(DocumentType, DocumentNumber, String)]] =
     transactor.connection.use { conn =>
       IO.blocking {
-        val stmt = conn.prepareStatement("SELECT tipo_documento, numero_documento, nombres || ' ' || apellidos AS nombre FROM training_dev.postulantes WHERE id = ?")
+        val stmt = conn.prepareStatement("SELECT document_type, document_number, first_name || ' ' || last_name AS nombre FROM training_dev.postulants WHERE id_postulant = ?")
         try
           stmt.setInt(1, id)
           val rs = stmt.executeQuery()
           try
             if (rs.next()) {
-              val docType = if (rs.getString("tipo_documento") == "DNI") DocumentType.DNI else DocumentType.CE
-              val docNum = DocumentNumber(rs.getString("numero_documento"))
+              val docType = if (rs.getString("document_type") == "DNI") DocumentType.DNI else DocumentType.CE
+              val docNum = DocumentNumber(rs.getString("document_number"))
               val nombre = rs.getString("nombre")
               Some((docType, docNum, nombre))
             } else {
@@ -40,80 +41,22 @@ class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends Cap
       }
     }
 
-  override def registrarAsistencia(asistencia: Asistencia): IO[Unit] =
+  override def registrarAsistencia(postulanteId: Int, diaCapacitacion: Int, asistio: Boolean): IO[Unit] =
     transactor.connection.use { conn =>
       IO.blocking {
-        // Consulta SQL para Asistencia Manual y Automática
         val sql = """
-          INSERT INTO training_dev.control_diario (postulante_id, fecha_asistencia, dia_capacitacion, tipo_asistencia_id)
-          VALUES (
-              ?, 
-              CURRENT_DATE, 
-              ?, 
-              (SELECT id FROM training_dev.tipos_asistencia WHERE codigo = ?)
-          );
+          INSERT INTO training_dev.daily_control (id_postulant, training_day, attendance, attendance_date)
+          VALUES (?, ?, ?, CURRENT_DATE)
+          ON CONFLICT (id_postulant, training_day) 
+          DO UPDATE SET 
+              attendance = EXCLUDED.attendance,
+              attendance_date = CURRENT_DATE;
         """
         val stmt = conn.prepareStatement(sql)
-        try
-          stmt.setInt(1, asistencia.postulanteId)
-          stmt.setInt(2, asistencia.diaCapacitacion)
-          stmt.setString(3, asistencia.codigoAsistencia.toString)
-          stmt.executeUpdate()
-          ()
-        finally stmt.close()
-      }
-    }
-
-  override def hasAsistencia(postulanteId: Int, dia: Int): IO[Boolean] =
-    transactor.connection.use { conn =>
-      IO.blocking {
-        val stmt = conn.prepareStatement("SELECT 1 FROM training_dev.control_diario WHERE postulante_id = ? AND dia_capacitacion = ?")
         try
           stmt.setInt(1, postulanteId)
-          stmt.setInt(2, dia)
-          val rs = stmt.executeQuery()
-          try rs.next()
-          finally rs.close()
-        finally stmt.close()
-      }
-    }
-
-  override def registrarScorecard(scorecard: Scorecard): IO[Unit] =
-    transactor.connection.use { conn =>
-      IO.blocking {
-        // En el esquema del DBA, el Scorecard actualiza el estado, validación operativa y observaciones directamente en el postulante
-        val sql = """
-          UPDATE training_dev.postulantes
-          SET 
-              estado_postulante_id = (SELECT id FROM training_dev.estados_postulante WHERE codigo = ?),
-              validacion_operativa = ?,
-              observaciones = ?
-          WHERE id = ?;
-        """
-        val stmt = conn.prepareStatement(sql)
-        try
-          stmt.setString(1, scorecard.estadoScorecard.toString)
-          stmt.setBoolean(2, scorecard.validacionOperativa)
-          stmt.setString(3, scorecard.observaciones)
-          stmt.setInt(4, scorecard.postulanteId)
-          stmt.executeUpdate()
-          ()
-        finally stmt.close()
-      }
-    }
-
-  override def actualizarEstadoPostulante(postulanteId: Int, estado: PostulanteEstado): IO[Unit] =
-    transactor.connection.use { conn =>
-      IO.blocking {
-        val sql = """
-          UPDATE training_dev.postulantes
-          SET estado_postulante_id = (SELECT id FROM training_dev.estados_postulante WHERE codigo = ?)
-          WHERE id = ?;
-        """
-        val stmt = conn.prepareStatement(sql)
-        try
-          stmt.setString(1, estado.toString)
-          stmt.setInt(2, postulanteId)
+          stmt.setInt(2, diaCapacitacion)
+          stmt.setBoolean(3, asistio)
           stmt.executeUpdate()
           ()
         finally stmt.close()
@@ -125,9 +68,8 @@ class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends Cap
       IO.blocking {
         val sql = """
           SELECT COUNT(*)::INT 
-          FROM training_dev.control_diario cd
-          JOIN training_dev.tipos_asistencia ta ON cd.tipo_asistencia_id = ta.id
-          WHERE cd.postulante_id = ? AND ta.codigo = 'A';
+          FROM training_dev.daily_control
+          WHERE id_postulant = ? AND attendance = true;
         """
         val stmt = conn.prepareStatement(sql)
         try
@@ -151,41 +93,40 @@ class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends Cap
         // La consulta SQL analítica de alta velocidad proporcionada por el DBA
         val sql = """
           SELECT 
-              p.id AS "postulanteId",
-              CONCAT(p.nombres, ' ', p.apellidos) AS "nombreCompleto",
-              p.tipo_documento AS "tipoDocumento",
-              p.numero_documento AS "numeroDocumento",
+              p.id_postulant AS "postulanteId",
+              CONCAT(p.first_name, ' ', p.last_name) AS "nombreCompleto",
+              p.document_type AS "tipoDocumento",
+              p.document_number AS "numeroDocumento",
               
-              -- Cuenta total de días asistidos marcados con 'A' (incluye extras para estadística)
-              COUNT(CASE WHEN ta.codigo = 'A' THEN 1 END)::INT AS "asistenciasRegistradas",
+              -- Cuenta total de días asistidos marcados con attendance=true
+              COUNT(CASE WHEN dc.attendance = true THEN 1 END)::INT AS "asistenciasRegistradas",
               
               -- Multiplica por S/ 15 únicamente si el día de capacitación está entre el 1 y el 7
-              SUM(CASE WHEN cd.dia_capacitacion BETWEEN 1 AND 7 AND ta.codigo = 'A' THEN 15.00 ELSE 0.00 END)::DOUBLE PRECISION AS "montoBonoAcumulado",
+              SUM(CASE WHEN dc.training_day BETWEEN 1 AND 7 AND dc.attendance = true THEN 15.00 ELSE 0.00 END)::DOUBLE PRECISION AS "montoBonoAcumulado",
               
               -- Si aún no se evalúa el scorecard, por defecto se asume 'EN_CAPACITACION'
-              COALESCE(ep.codigo, 'EN_CAPACITACION') AS "estadoScorecard",
-              p.validacion_operativa AS "validacionOperativa",
+              COALESCE(ps.code, 'EN_CAPACITACION') AS "estadoScorecard",
+              p.operational_validation AS "validacionOperativa",
               
               -- Regla de Cortes: Días 1-15 (Corte 1) | Días 16-31 (Corte 2)
               CASE 
-                  WHEN EXTRACT(DAY FROM p.fecha_inicio) BETWEEN 1 AND 15 THEN 1
+                  WHEN EXTRACT(DAY FROM p.start_date) BETWEEN 1 AND 15 THEN 1
                   ELSE 2
               END::INT AS "corteOperativo",
               
               -- Fecha de Pago: Corte 1 paga el 18 del mes siguiente. Corte 2 paga el 5 del subsiguiente.
               CASE 
-                  WHEN EXTRACT(DAY FROM p.fecha_inicio) BETWEEN 1 AND 15 
-                      THEN (p.fecha_inicio + INTERVAL '1 month')::DATE - EXTRACT(DAY FROM p.fecha_inicio + INTERVAL '1 month')::INT + 18
+                  WHEN EXTRACT(DAY FROM p.start_date) BETWEEN 1 AND 15 
+                      THEN (p.start_date + INTERVAL '1 month')::DATE - EXTRACT(DAY FROM p.start_date + INTERVAL '1 month')::INT + 18
                   ELSE 
-                      (p.fecha_inicio + INTERVAL '2 month')::DATE - EXTRACT(DAY FROM p.fecha_inicio + INTERVAL '2 month')::INT + 5
+                      (p.start_date + INTERVAL '2 month')::DATE - EXTRACT(DAY FROM p.start_date + INTERVAL '2 month')::INT + 5
               END AS "fechaPagoEstimada"
 
-          FROM training_dev.postulantes p
-          LEFT JOIN training_dev.estados_postulante ep ON p.estado_postulante_id = ep.id
-          LEFT JOIN training_dev.control_diario cd ON p.id = cd.postulante_id
-          LEFT JOIN training_dev.tipos_asistencia ta ON cd.tipo_asistencia_id = ta.id
-          WHERE p.id = ?
-          GROUP BY p.id, ep.codigo, p.nombres, p.apellidos, p.tipo_documento, p.numero_documento, p.validacion_operativa, p.fecha_inicio;
+          FROM training_dev.postulants p
+          LEFT JOIN training_dev.postulant_statuses ps ON p.id_state = ps.id_state
+          LEFT JOIN training_dev.daily_control dc ON p.id_postulant = dc.id_postulant
+          WHERE p.id_postulant = ?
+          GROUP BY p.id_postulant, ps.code, p.first_name, p.last_name, p.document_type, p.document_number, p.operational_validation, p.start_date;
         """
         val stmt = conn.prepareStatement(sql)
         try
@@ -203,15 +144,39 @@ class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends Cap
                 case _ => PostulanteEstado.EN_CAPACITACION
               }
 
-              val scorecardEstado = score match {
-                case "APTO" => Some(ScorecardEstado.APTO)
-                case "NO_APTO" => Some(ScorecardEstado.NO_APTO)
-                case _ => None
-              }
-
               val valOperativa = rs.getBoolean("validacionOperativa")
               val date = rs.getDate("fechaPagoEstimada")
               val localDate = if (date != null) Some(date.toLocalDate) else None
+
+              // Segunda consulta: Historial detallado de asistencias día a día
+              val sqlDetalle = """
+                SELECT 
+                    dc.training_day AS dia,
+                    CASE WHEN dc.attendance THEN 'A' ELSE 'F' END AS estado,
+                    CASE 
+                        WHEN dc.training_day BETWEEN 1 AND 2 THEN 'Manual'
+                        ELSE 'Nexus'
+                    END AS origen
+                FROM training_dev.daily_control dc
+                WHERE dc.id_postulant = ?
+                ORDER BY dc.training_day;
+              """
+              val stmtDetalle = conn.prepareStatement(sqlDetalle)
+              val historial = try
+                stmtDetalle.setInt(1, postulanteId)
+                val rsDetalle = stmtDetalle.executeQuery()
+                try
+                  val buffer = scala.collection.mutable.ListBuffer[AsistenciaDetalle]()
+                  while (rsDetalle.next()) {
+                    buffer += AsistenciaDetalle(
+                      dia = rsDetalle.getInt("dia"),
+                      estado = rsDetalle.getString("estado"),
+                      origen = rsDetalle.getString("origen")
+                    )
+                  }
+                  buffer.toList
+                finally rsDetalle.close()
+              finally stmtDetalle.close()
 
               Some(PostulanteResumen(
                 postulanteId = rs.getInt("postulanteId"),
@@ -220,15 +185,119 @@ class PostgresCapacitacionRepository(transactor: PostgresTransactor) extends Cap
                 numeroDocumento = docNum,
                 asistenciasRegistradas = rs.getInt("asistenciasRegistradas"),
                 montoBonoAcumulado = rs.getDouble("montoBonoAcumulado"),
-                estadoScorecard = scorecardEstado,
+                estadoScorecard = Some(score),
                 validacionOperativa = Some(valOperativa),
                 corteOperativo = Some(rs.getInt("corteOperativo")),
                 fechaPagoEstimada = localDate,
-                estadoGeneral = estadoGeneral
+                estadoGeneral = estadoGeneral,
+                historialAsistencias = historial
               ))
             } else {
               None
             }
+          finally rs.close()
+        finally stmt.close()
+      }
+    }
+
+  override def listarPostulantes(): IO[List[PostulanteBasico]] =
+    transactor.connection.use { conn =>
+      IO.blocking {
+        val sql = """
+          SELECT 
+              p.id_postulant AS id,
+              CONCAT(p.first_name, ' ', p.last_name) AS nombre_completo,
+              COALESCE(p.position, 'Sin asignar') AS puesto,
+              COALESCE(ps.code, 'EN_CAPACITACION') AS estado
+          FROM training_dev.postulants p
+          LEFT JOIN training_dev.postulant_statuses ps ON p.id_state = ps.id_state
+          ORDER BY p.id_postulant;
+        """
+        val stmt = conn.prepareStatement(sql)
+        try
+          val rs = stmt.executeQuery()
+          try
+            val buffer = scala.collection.mutable.ListBuffer[PostulanteBasico]()
+            while (rs.next()) {
+              val estado = rs.getString("estado") match {
+                case "ALTA" => PostulanteEstado.ALTA
+                case "NO_APTO" => PostulanteEstado.NO_APTO
+                case _ => PostulanteEstado.EN_CAPACITACION
+              }
+              buffer += PostulanteBasico(
+                id = rs.getInt("id"),
+                nombreCompleto = rs.getString("nombre_completo"),
+                puesto = rs.getString("puesto"),
+                estado = estado
+              )
+            }
+            buffer.toList
+          finally rs.close()
+        finally stmt.close()
+      }
+    }
+
+  override def listarPostulantesPorUsuario(idUser: Int): IO[List[PostulanteDetalle]] =
+    transactor.connection.use { conn =>
+      IO.blocking {
+        val sql = """
+          SELECT 
+              p.id_postulant AS "postulanteId",
+              p.first_name AS "nombres",
+              p.last_name AS "apellidos",
+              p.document_type AS "tipoDocumento",
+              p.document_number AS "numeroDocumento",
+              p.id_portfolio AS "idPortfolio",
+              p.id_campaign AS "idCampaign",
+              COALESCE(ps.code, 'EN_CAPACITACION') AS "estadoScorecard",
+              (
+                  SELECT COALESCE(json_agg(json_build_object(
+                      'dia', sub_dc.training_day,
+                      'asistio', sub_dc.attendance
+                  ) ORDER BY sub_dc.training_day), '[]'::json)
+                  FROM training_dev.daily_control sub_dc
+                  WHERE sub_dc.id_postulant = p.id_postulant
+              ) AS "historialAsistencias"
+          FROM training_dev.postulants p
+          LEFT JOIN training_dev.postulant_statuses ps ON p.id_state = ps.id_state
+          WHERE p.id_user = ? 
+          ORDER BY p.last_name ASC;
+        """
+        val stmt = conn.prepareStatement(sql)
+        try
+          stmt.setInt(1, idUser)
+          val rs = stmt.executeQuery()
+          try
+            val buffer = scala.collection.mutable.ListBuffer[PostulanteDetalle]()
+            while (rs.next()) {
+              // Parsear el JSON del json_agg con Circe
+              val jsonStr = rs.getString("historialAsistencias")
+              val historial = parse(jsonStr).toOption
+                .flatMap(_.asArray)
+                .map(_.toList.flatMap { json =>
+                  for
+                    dia     <- json.hcursor.downField("dia").as[Int].toOption
+                    asistio <- json.hcursor.downField("asistio").as[Boolean].toOption
+                  yield HistorialAsistencia(dia, asistio)
+                })
+                .getOrElse(List.empty)
+
+              val idPortfolio = rs.getInt("idPortfolio")
+              val idCampaign = rs.getInt("idCampaign")
+
+              buffer += PostulanteDetalle(
+                postulanteId = rs.getInt("postulanteId"),
+                nombres = rs.getString("nombres"),
+                apellidos = rs.getString("apellidos"),
+                tipoDocumento = rs.getString("tipoDocumento"),
+                numeroDocumento = rs.getString("numeroDocumento"),
+                idPortfolio = if (rs.wasNull()) None else Some(idPortfolio),
+                idCampaign = if (rs.wasNull()) None else Some(idCampaign),
+                estadoScorecard = rs.getString("estadoScorecard"),
+                historialAsistencias = historial
+              )
+            }
+            buffer.toList
           finally rs.close()
         finally stmt.close()
       }

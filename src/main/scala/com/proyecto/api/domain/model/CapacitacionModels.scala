@@ -5,29 +5,8 @@ import java.time.LocalDate
 enum AsistenciaCodigo:
   case A, F
 
-enum AsistenciaRegistroTipo:
-  case Manual, Automatico
-
-enum ScorecardEstado:
-  case APTO, NO_APTO
-
 enum PostulanteEstado:
   case EN_CAPACITACION, ALTA, NO_APTO
-
-case class Asistencia(
-    postulanteId: Int,
-    diaCapacitacion: Int,
-    codigoAsistencia: AsistenciaCodigo,
-    tipoRegistro: AsistenciaRegistroTipo,
-    registradoPor: String
-)
-
-case class Scorecard(
-    postulanteId: Int,
-    estadoScorecard: ScorecardEstado,
-    validacionOperativa: Boolean,
-    observaciones: String
-)
 
 case class BonoCapacitacion(
     postulanteId: Int,
@@ -37,6 +16,21 @@ case class BonoCapacitacion(
     fechaPagoEstimada: LocalDate
 )
 
+/** DTO básico para el listado de postulantes en la pantalla principal */
+case class PostulanteBasico(
+    id: Int,
+    nombreCompleto: String,
+    puesto: String,
+    estado: PostulanteEstado
+)
+
+/** Detalle de asistencia por día para la Hoja de Asistencia del Curso */
+case class AsistenciaDetalle(
+    dia: Int,
+    estado: String,
+    origen: String
+)
+
 case class PostulanteResumen(
     postulanteId: Int,
     nombreCompleto: String,
@@ -44,9 +38,29 @@ case class PostulanteResumen(
     numeroDocumento: DocumentNumber,
     asistenciasRegistradas: Int,
     montoBonoAcumulado: Double,
-    estadoScorecard: Option[ScorecardEstado],
+    estadoScorecard: Option[String],
     validacionOperativa: Option[Boolean],
     corteOperativo: Option[Int],
     fechaPagoEstimada: Option[LocalDate],
-    estadoGeneral: PostulanteEstado
+    estadoGeneral: PostulanteEstado,
+    historialAsistencias: List[AsistenciaDetalle]
+)
+
+/** Historial de asistencia por día para el endpoint mis-postulantes */
+case class HistorialAsistencia(
+    dia: Int,
+    asistio: Boolean
+)
+
+/** Detalle completo de un postulante asignado al capacitador */
+case class PostulanteDetalle(
+    postulanteId: Int,
+    nombres: String,
+    apellidos: String,
+    tipoDocumento: String,
+    numeroDocumento: String,
+    idPortfolio: Option[Int],
+    idCampaign: Option[Int],
+    estadoScorecard: String,
+    historialAsistencias: List[HistorialAsistencia]
 )
